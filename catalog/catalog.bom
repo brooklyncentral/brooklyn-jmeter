@@ -1,0 +1,251 @@
+brooklyn.catalog:
+
+  id: brooklyn-jmeter
+  bundle: io.cloudsoft.jmeter.brooklyn-jmeter
+  version: "0.12.0-SNAPSHOT"
+  publish:
+    license_code: Apache-2.0
+    overview: README.md
+
+  items:
+
+  - id: jmeter
+    iconUrl: classpath://resources/logo.jpg
+    name: Apache JMeter base entity
+    description: >
+      Apache JMeter is a tool for load and performance testing. This entity
+      must be configured with a plan to execute. Map entries in "jmeter.properties"
+      will be used as key=value arguments for launching JMeter.
+    itemType: entity
+    item:
+      type: org.apache.brooklyn.entity.software.base.VanillaSoftwareProcess
+      name: Apache JMeter
+      brooklyn.parameters:
+      - name: plan
+        label: Plan
+        description: The plan JMeter should execute
+        type: string
+        constraints:
+        - required
+      - name: shutdownPort
+        label: Shutdown port
+        description: The port JMeter should listen on for requests to shut down
+        type: port
+        default: "4445+"
+        # Don't care about this in the UI.
+        pinned: false
+        constraints:
+        - required
+
+      brooklyn.config:
+        install.version: 3.2
+        runtimeTemplates:
+          $brooklyn:config("plan"): plan.jmx
+
+        jmeter.properties: {}
+        jmeter.logFile: log.jtl
+
+        install.command:
+          $brooklyn:formatString:
+          - |
+            set -e
+            VERSION="%s"
+            if [ $EUID -eq 0 ]; then
+              yum install -y java-1.8.0-openjdk jq
+            else
+              sudo yum install -y java-1.8.0-openjdk jq
+            fi
+            HOST=$(curl -s 'https://www.apache.org/jmeter/closer.cgi?as_json=1' | jq --raw-output '.preferred')
+            DOWNLOAD="${HOST}/jmeter/binaries/apache-jmeter-${VERSION}.tgz"
+            curl -o jmeter.tgz "${DOWNLOAD}"
+            tar xzf jmeter.tgz
+            mv "apache-jmeter-${VERSION}" apache-jmeter
+          - $brooklyn:config("install.version")
+
+        launch.command:
+          # Setting jmeterengine.nongui.port without setting maxport can cause JMeter to ignore
+          # the value if it's higher than the default maxport. This breaks its shutdown script.
+          $brooklyn:formatString:
+          - >
+            nohup $INSTALL_DIR/apache-jmeter/bin/jmeter %s -n -t plan.jmx -l %s
+            -Djmeterengine.nongui.port=%s
+            -Djmeterengine.nongui.maxport=65535
+            >>console.out 2>>console.err &
+          - $brooklyn:attributeWhenReady("jmeter.propertiesString")
+          - $brooklyn:config("jmeter.logFile")
+          - $brooklyn:attributeWhenReady("shutdownPort")
+
+        stop.command:
+          $brooklyn:formatString:
+          - "$INSTALL_DIR/apache-jmeter/bin/shutdown.sh %s"
+          - $brooklyn:attributeWhenReady("shutdownPort")
+
+        # This should behave differently depending on whether JMeter is paused or not.
+        checkRunning.command: "$INSTALL_DIR/apache-jmeter/bin/jmeter -v"
+
+      brooklyn.enrichers:
+      # Creates the properties for the launch command.
+      - type: org.apache.brooklyn.enricher.stock.Joiner
+        brooklyn.config:
+          enricher.sourceSensor: "jmeter.properties"
+          enricher.targetSensor: "jmeter.propertiesString"
+          enricher.joiner.separator: " "
+          enricher.joiner.joinMapEntries: true
+
+      brooklyn.initializers:
+      - type: org.apache.brooklyn.core.sensor.StaticSensor
+        brooklyn.config:
+          name: jmeter.properties
+          static.value: $brooklyn:config("jmeter.properties")
+          targetType: java.util.HashMap
+
+      - type: org.apache.brooklyn.core.sensor.StaticSensor
+        brooklyn.config:
+          name: log.location
+          static.value:
+            $brooklyn:formatString:
+            - "%s/%s"
+            - $brooklyn:attributeWhenReady("run.dir")
+            - $brooklyn:config("jmeter.logFile")
+
+
+  - id: jmeter-app
+    iconUrl: classpath://resources/logo.jpg
+    name: Apache JMeter
+    description: >
+      Apache JMeter is a tool for load and performance testing. This entity
+      configures jmeter-base with a plan that uses properties named "host",
+      "port", "path", "numThreads" and "requestDelay" to control the initial
+      load. It provides effectors for pausing JMeter's execution and for
+      changing the generated load at runtime.
+    itemType: entity
+    item:
+      type: jmeter
+      brooklyn.parameters:
+      - &host
+        name: host
+        label: Host
+        description: Domain name or IP address of the host JMeter should target
+        type: string
+        constraints:
+        - required
+      - &port
+        name: port
+        label: Port
+        description: The port JMeter should target
+        type: integer
+        default: 80
+        constraints:
+        - required
+      - &path
+        name: path
+        label: Path
+        description: The path JMeter should target
+        type: string
+        default: "/"
+        constraints:
+        - required
+      - &numThreads
+        name: numThreads
+        label: Threads
+        description: The number of threads JMeter should use
+        type: integer
+        default: 10
+        constraints:
+        - required
+      - &requestDelay
+        name: requestDelay
+        label: Request delay
+        description: The time in milliseconds each JMeter thread should wait between requests
+        type: integer
+        default: 100
+        constraints:
+        - required
+
+      brooklyn.config:
+        plan: classpath://resources/load.jmx
+
+        jmeter.properties:
+          -Jhost: $brooklyn:config("host")
+          -Jport: $brooklyn:config("port")
+          -Jpath: $brooklyn:config("path")
+          -JnumThreads: $brooklyn:config("numThreads")
+          -JrequestDelay: $brooklyn:config("requestDelay")
+
+      brooklyn.initializers:
+      - type: org.apache.brooklyn.core.effector.ssh.SshCommandEffector
+        brooklyn.config:
+          name: changeLoad
+          description: >
+            Restarts Apache JMeter and sets the arguments as values for the properties
+            -JnumThreads and -JrequestDelay. Generated requests per second will be
+            roughly newThreadCount * (1000 / newRequestDelay).
+
+          parameters:
+            newThreadCount:
+              label: Threads
+              description: The number of threads the plan should use
+              default: 10
+              constraints:
+              - required
+            newRequestDelay:
+              label: Request delay
+              description: The period in milliseconds each JMeter thread should wait between requests
+              default: 100
+              constraints:
+              - required
+
+          # Can't use DSL for command so configure the constituent parts as environment variables.
+          shell.env:
+            INSTALL_DIR: $brooklyn:attributeWhenReady("install.dir")
+            STOP: $brooklyn:config("stop.command")
+            # As launch command, with the addition of -JnumThreads and -JrequestDelay
+            # after the other properties.
+            START:
+              $brooklyn:formatString:
+              - >
+                nohup $INSTALL_DIR/apache-jmeter/bin/jmeter %s
+                "-JnumThreads=$newThreadCount" "-JrequestDelay=$newRequestDelay"
+                -n -t plan.jmx -l %s
+                -Djmeterengine.nongui.port=%s
+                -Djmeterengine.nongui.maxport=65535
+                >>console.out 2>>console.err &
+              - $brooklyn:attributeWhenReady("jmeter.propertiesString")
+              - $brooklyn:config("jmeter.logFile")
+              - $brooklyn:attributeWhenReady("shutdownPort")
+
+          # The command runs relative to the entitys run dir.
+          # sleep is a really lazy way to wait for the old process to exit.
+          command: |
+            eval $STOP
+            sleep 3
+            eval $START
+
+      - type: org.apache.brooklyn.core.effector.ssh.SshCommandEffector
+        brooklyn.config:
+          name: pause
+          description: |
+            Stop Apache JMeter without releasing resources
+          # Can't use DSL for command so configure it as environment variables.
+          shell.env:
+            INSTALL_DIR: $brooklyn:attributeWhenReady("install.dir")
+            STOP: $brooklyn:config("stop.command")
+          command: "eval $STOP"
+
+
+  - id: jmeter-app-template
+    iconUrl: classpath://resources/logo.jpg
+    name: Load Generator
+    description: Runs Apache JMeter against a configurable endpoint.
+    itemType: template
+    item:
+      services:
+        - type: org.apache.brooklyn.entity.stock.BasicApplication
+          brooklyn.parameters:
+          - *host
+          - *port
+          - *path
+          - *numThreads
+          - *requestDelay
+          brooklyn.children:
+            - type: jmeter-app
