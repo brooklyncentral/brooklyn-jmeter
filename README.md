@@ -21,6 +21,8 @@ Two entities and one template are provided.
 **jmeter**
 
 A generic entity that must be configured with a plan for JMeter to execute.
+It depends on the `yum` package manager so must be run on a CentOS or RHEL
+distribution.
 
 *Configuration*
 
