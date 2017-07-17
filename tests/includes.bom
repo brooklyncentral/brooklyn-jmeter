@@ -1,0 +1,46 @@
+brooklyn.catalog:
+  version: "0.12.0-SNAPSHOT"
+  license_code: APACHE-2.0
+
+  items:
+  - id: test-case
+    item:
+      type: org.apache.brooklyn.test.framework.TestCase
+
+  - id: ssh-test
+    item:
+      type: org.apache.brooklyn.test.framework.TestSshCommand
+
+  - id: sensor-test
+    item:
+      type: org.apache.brooklyn.test.framework.TestSensor
+
+  - id: assert-up-initial
+    item:
+      type: org.apache.brooklyn.test.framework.TestSensor
+      name: "TEST [service.isUp] IS [true]"
+      sensor: service.isUp
+      brooklyn.parameters:
+        - name: timeout.initialStartup
+          description: The timeout for provisioning, installing and launching the app-under-test.
+          type: org.apache.brooklyn.util.time.Duration
+          default: 1h
+      brooklyn.config:
+        timeout: $brooklyn:config("timeout.initialStartup")
+      assert:
+        - equals: true
+
+  - id: assert-up
+    item:
+      type: sensor-test
+      name: "TEST [service.isUp] IS [true]"
+      sensor: service.isUp
+      assert:
+        - equals: true
+
+  - id: test-reqsPerSec
+    item:
+      type: sensor-test
+      name: "TEST [webapp.reqs.perSec.last]"
+      brooklyn.config:
+        sensor: webapp.reqs.perSec.last
