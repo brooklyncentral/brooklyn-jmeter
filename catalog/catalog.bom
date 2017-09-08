@@ -43,7 +43,7 @@ brooklyn.catalog:
 
       brooklyn.config:
         install.version: 3.2
-        runtimeTemplates:
+        runtimeFiles:
           $brooklyn:config("plan"): plan.jmx
 
         jmeter.properties: {}
@@ -112,6 +112,65 @@ brooklyn.catalog:
             - $brooklyn:attributeWhenReady("run.dir")
             - $brooklyn:config("jmeter.logFile")
 
+      - type: org.apache.brooklyn.core.effector.ssh.SshCommandEffector
+        brooklyn.config:
+          name: changeLoad
+          description: >
+            Restarts Apache JMeter and sets the arguments as values for the properties
+            -JnumThreads and -JrequestDelay. Generated requests per second will be
+            roughly newThreadCount * (1000 / newRequestDelay).
+
+          parameters:
+            newThreadCount:
+              label: Threads
+              description: The number of threads the plan should use
+              default: 10
+              constraints:
+              - required
+            newRequestDelay:
+              label: Request delay
+              description: The period in milliseconds each JMeter thread should wait between requests
+              default: 100
+              constraints:
+              - required
+
+          # Can't use DSL for command so configure the constituent parts as environment variables.
+          shell.env:
+            INSTALL_DIR: $brooklyn:attributeWhenReady("install.dir")
+            STOP: $brooklyn:config("stop.command")
+            # As launch command, with the addition of -JnumThreads and -JrequestDelay
+            # after the other properties.
+            START:
+              $brooklyn:formatString:
+              - >
+                nohup $INSTALL_DIR/apache-jmeter/bin/jmeter %s
+                "-JnumThreads=$newThreadCount" "-JrequestDelay=$newRequestDelay"
+                -n -t plan.jmx -l %s
+                -Djmeterengine.nongui.port=%s
+                -Djmeterengine.nongui.maxport=65535
+                >>console.out 2>>console.err &
+              - $brooklyn:attributeWhenReady("jmeter.propertiesString")
+              - $brooklyn:config("jmeter.logFile")
+              - $brooklyn:attributeWhenReady("shutdownPort")
+
+          # The command runs relative to the entitys run dir.
+          # sleep is a really lazy way to wait for the old process to exit.
+          command: |
+            eval $STOP
+            sleep 3
+            eval $START
+
+      - type: org.apache.brooklyn.core.effector.ssh.SshCommandEffector
+        brooklyn.config:
+          name: pause
+          description: |
+            Stop Apache JMeter without releasing resources
+          # Can't use DSL for command so configure it as environment variables.
+          shell.env:
+            INSTALL_DIR: $brooklyn:attributeWhenReady("install.dir")
+            STOP: $brooklyn:config("stop.command")
+          command: "eval $STOP"
+
 
   - id: jmeter-app
     iconUrl: classpath://resources/logo.jpg
@@ -175,66 +234,6 @@ brooklyn.catalog:
           -Jpath: $brooklyn:config("path")
           -JnumThreads: $brooklyn:config("numThreads")
           -JrequestDelay: $brooklyn:config("requestDelay")
-
-      brooklyn.initializers:
-      - type: org.apache.brooklyn.core.effector.ssh.SshCommandEffector
-        brooklyn.config:
-          name: changeLoad
-          description: >
-            Restarts Apache JMeter and sets the arguments as values for the properties
-            -JnumThreads and -JrequestDelay. Generated requests per second will be
-            roughly newThreadCount * (1000 / newRequestDelay).
-
-          parameters:
-            newThreadCount:
-              label: Threads
-              description: The number of threads the plan should use
-              default: 10
-              constraints:
-              - required
-            newRequestDelay:
-              label: Request delay
-              description: The period in milliseconds each JMeter thread should wait between requests
-              default: 100
-              constraints:
-              - required
-
-          # Can't use DSL for command so configure the constituent parts as environment variables.
-          shell.env:
-            INSTALL_DIR: $brooklyn:attributeWhenReady("install.dir")
-            STOP: $brooklyn:config("stop.command")
-            # As launch command, with the addition of -JnumThreads and -JrequestDelay
-            # after the other properties.
-            START:
-              $brooklyn:formatString:
-              - >
-                nohup $INSTALL_DIR/apache-jmeter/bin/jmeter %s
-                "-JnumThreads=$newThreadCount" "-JrequestDelay=$newRequestDelay"
-                -n -t plan.jmx -l %s
-                -Djmeterengine.nongui.port=%s
-                -Djmeterengine.nongui.maxport=65535
-                >>console.out 2>>console.err &
-              - $brooklyn:attributeWhenReady("jmeter.propertiesString")
-              - $brooklyn:config("jmeter.logFile")
-              - $brooklyn:attributeWhenReady("shutdownPort")
-
-          # The command runs relative to the entitys run dir.
-          # sleep is a really lazy way to wait for the old process to exit.
-          command: |
-            eval $STOP
-            sleep 3
-            eval $START
-
-      - type: org.apache.brooklyn.core.effector.ssh.SshCommandEffector
-        brooklyn.config:
-          name: pause
-          description: |
-            Stop Apache JMeter without releasing resources
-          # Can't use DSL for command so configure it as environment variables.
-          shell.env:
-            INSTALL_DIR: $brooklyn:attributeWhenReady("install.dir")
-            STOP: $brooklyn:config("stop.command")
-          command: "eval $STOP"
 
 
   - id: jmeter-app-template
